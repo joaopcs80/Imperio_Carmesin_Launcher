@@ -1,16 +1,19 @@
 import { useState, useEffect } from "react";
-import { Play, Download, Settings, Users, Server, Shield, HelpCircle, X, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Download, Play, RefreshCw, X, Server, Users, Shield, CheckCircle2, HelpCircle, Settings, Package } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import bgImage from "./assets/bg.png";
 import "./App.css";
 
 function App() {
-  const [status, setStatus] = useState<"idle" | "downloading" | "ready" | "playing">("idle");
+  const [status, setStatus] = useState<"bepinex_missing" | "bepinex_downloading" | "modpack_missing" | "modpack_downloading" | "ready" | "playing">("bepinex_missing");
   const [progress, setProgress] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   
+  const [bepVersions, setBepVersions] = useState<{version: string, url: string}[]>([]);
+  const [selectedBepUrl, setSelectedBepUrl] = useState("");
+
   // Dynamic Data States
   const [serverOnline, setServerOnline] = useState(false);
   const [playersOnline, setPlayersOnline] = useState(0);
@@ -53,31 +56,54 @@ function App() {
           const installedVersion = localStorage.getItem("modpack_version");
           
           // Verificar pasta física
-          invoke<boolean>("check_modpack_installed").then(isInstalled => {
-            if (isInstalled && installedVersion === currentLatest) {
-              setStatus((prev) => prev === "playing" ? "playing" : "ready");
+          invoke<boolean>("check_bepinex_installed").then(hasBepinex => {
+            if (!hasBepinex) {
+               setStatus((prev) => prev === "playing" ? "playing" : "bepinex_missing");
+               // Buscar versões
+               invoke<{version: string, url: string}[]>("fetch_bepinex_versions").then(versions => {
+                   setBepVersions(versions);
+                   if (versions.length > 0) setSelectedBepUrl(versions[0].url);
+               }).catch(() => {});
             } else {
-              setStatus((prev) => prev === "playing" ? "playing" : "idle");
+               invoke<boolean>("check_modpack_installed").then(isInstalled => {
+                 if (isInstalled && installedVersion === currentLatest) {
+                   setStatus((prev) => prev === "playing" ? "playing" : "ready");
+                 } else {
+                   setStatus((prev) => prev === "playing" ? "playing" : "modpack_missing");
+                 }
+               });
             }
           });
           
         } else {
           setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no momento." }]);
-          // Falha na API do Github (repositório privado ou sem release), confia apenas na pasta física
-          invoke<boolean>("check_modpack_installed").then(isInstalled => {
-             if (isInstalled) setStatus((prev) => prev === "playing" ? "playing" : "ready");
+          invoke<boolean>("check_bepinex_installed").then(hasBepinex => {
+             if (!hasBepinex) {
+                setStatus((prev) => prev === "playing" ? "playing" : "bepinex_missing");
+                invoke<{version: string, url: string}[]>("fetch_bepinex_versions").then(versions => {
+                    setBepVersions(versions);
+                    if (versions.length > 0) setSelectedBepUrl(versions[0].url);
+                }).catch(() => {});
+             } else {
+                invoke<boolean>("check_modpack_installed").then(isInstalled => {
+                   if (isInstalled) setStatus((prev) => prev === "playing" ? "playing" : "ready");
+                   else setStatus((prev) => prev === "playing" ? "playing" : "modpack_missing");
+                });
+             }
           });
         }
       } catch (e) {
         setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no momento." }]);
-        invoke<boolean>("check_modpack_installed").then(isInstalled => {
-           if (isInstalled) setStatus((prev) => prev === "playing" ? "playing" : "ready");
+        invoke<boolean>("check_bepinex_installed").then(hasBepinex => {
+           if (!hasBepinex) setStatus((prev) => prev === "playing" ? "playing" : "bepinex_missing");
+           else setStatus((prev) => prev === "playing" ? "playing" : "ready");
         });
       }
     }).catch(() => {
         setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no momento." }]);
-        invoke<boolean>("check_modpack_installed").then(isInstalled => {
-           if (isInstalled) setStatus((prev) => prev === "playing" ? "playing" : "ready");
+        invoke<boolean>("check_bepinex_installed").then(hasBepinex => {
+           if (!hasBepinex) setStatus((prev) => prev === "playing" ? "playing" : "bepinex_missing");
+           else setStatus((prev) => prev === "playing" ? "playing" : "ready");
         });
     });
 
@@ -103,41 +129,58 @@ function App() {
     };
   }, []);
 
-  const handlePlayClick = async () => {
-    if (status === "idle") {
-      try {
-        const isRunning = await invoke<boolean>("check_game_running");
-        if (isRunning) {
-          setErrorMsg("O V Rising já está aberto! Feche o jogo antes de atualizar o ModPack.");
-          return;
+  const handleInstallBepInEx = async () => {
+    if (!selectedBepUrl) {
+        setErrorMsg("Selecione uma versão do BepInEx para instalar.");
+        return;
+    }
+    setStatus("bepinex_downloading");
+    try {
+        await invoke("download_bepinex", { url: selectedBepUrl });
+        const isInstalled = await invoke<boolean>("check_modpack_installed");
+        if (isInstalled) {
+            setStatus("ready");
+        } else {
+            setStatus("modpack_missing");
         }
-
-        setStatus("downloading");
-        setProgress(0);
-        
-        await invoke("download_and_extract");
-        
-        if (latestVersion) {
-          localStorage.setItem("modpack_version", latestVersion);
-        }
-        setStatus("ready");
-      } catch (error) {
-        setErrorMsg("Erro na atualização: " + error);
-        setStatus("idle");
-      }
-    } else if (status === "ready") {
-      try {
-        await invoke("launch_game");
-        setStatus("playing");
-      } catch (error) {
-        setErrorMsg("Erro ao iniciar o jogo: " + error);
-      }
+    } catch (error) {
+        setErrorMsg("Erro ao instalar BepInEx: " + error);
+        setStatus("bepinex_missing");
     }
   };
 
-  const forceUpdate = () => {
-    setStatus("idle");
+  const handleUpdateModPack = async () => {
+    try {
+      const isRunning = await invoke<boolean>("check_game_running");
+      if (isRunning) {
+        setErrorMsg("O V Rising já está aberto! Feche o jogo antes de atualizar o ModPack.");
+        return;
+      }
+      setStatus("modpack_downloading");
+      setProgress(0);
+      
+      await invoke("download_and_extract");
+      
+      if (latestVersion) {
+        localStorage.setItem("modpack_version", latestVersion);
+      }
+      setStatus("ready");
+    } catch (error) {
+      setErrorMsg("Erro na atualização: " + error);
+      setStatus("modpack_missing");
+    }
   };
+
+  const handleLaunchGame = async () => {
+    try {
+      await invoke("launch_game");
+      setStatus("playing");
+    } catch (error) {
+      setErrorMsg("Erro ao iniciar o jogo: " + error);
+    }
+  };
+
+
 
   const closeApp = () => {
     invoke("exit_app");
@@ -219,45 +262,74 @@ function App() {
           </div>
 
           {/* Action Area */}
-          <div className="flex flex-col items-end gap-4 w-[450px]">
-            {(status === "downloading" || status === "ready") && (
-              <div className="w-full bg-black/80 backdrop-blur-md rounded-xl p-4 border border-white/10 shadow-2xl transition-all duration-500">
-                {status === "downloading" ? (
-                  <>
-                    <div className="flex justify-between text-xs font-bold mb-2">
-                      <span className="text-red-400 uppercase tracking-wider">
-                        Baixando Modpack...
-                      </span>
-                      <span className="text-white/80">{progress}%</span>
-                    </div>
-                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gradient-to-r from-red-600 to-red-400 transition-all duration-300 ease-out"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex items-center justify-center gap-2 text-green-500 font-black tracking-widest text-sm py-1 uppercase">
-                    <CheckCircle2 size={18} className="text-green-400" />
-                    ModPack Instalado e Atualizado!
+          <div className="flex flex-col items-end gap-3 w-[450px]">
+            
+            {/* Módulo BepInEx */}
+            <div className="w-full bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-lg flex flex-col gap-3">
+               <div className="flex justify-between items-center">
+                   <span className="font-bold text-sm text-white/90 uppercase tracking-wider flex items-center gap-2"><Shield size={16} className="text-red-500" /> 1. Base BepInEx</span>
+                   {status === "bepinex_missing" ? <span className="text-[10px] text-red-400 font-bold uppercase tracking-widest bg-red-950/50 px-2 py-1 rounded">Faltando</span> : <span className="text-[10px] text-green-400 font-bold uppercase tracking-widest bg-green-950/50 px-2 py-1 rounded">Instalado</span>}
+               </div>
+               
+               {status === "bepinex_missing" ? (
+                  <div className="flex gap-2 h-[40px]">
+                     <select 
+                          className="flex-1 bg-black/50 border border-white/20 text-white rounded p-2 text-sm outline-none cursor-pointer"
+                          value={selectedBepUrl}
+                          onChange={(e) => setSelectedBepUrl(e.target.value)}
+                      >
+                          {bepVersions.length > 0 ? bepVersions.map(v => (
+                              <option key={v.version} value={v.url}>{v.version}</option>
+                          )) : <option>Buscando versões...</option>}
+                      </select>
+                      <button 
+                         onClick={handleInstallBepInEx}
+                         className="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-6 rounded transition-all whitespace-nowrap shadow-[0_0_15px_rgba(220,38,38,0.3)]"
+                      >
+                         INSTALAR
+                      </button>
                   </div>
-                )}
-              </div>
-            )}
+               ) : status === "bepinex_downloading" ? (
+                   <div className="text-xs text-red-400 animate-pulse text-center p-2 font-bold uppercase tracking-widest bg-black/50 rounded border border-white/5">
+                      Instalando Base...
+                   </div>
+               ) : (
+                  <div className="text-xs text-white/40 bg-black/30 p-2 rounded text-center border border-white/5">
+                     Módulo injetor principal ativo no jogo.
+                  </div>
+               )}
+            </div>
 
-            <div className="flex w-full gap-2 relative">
-              {status === "ready" && (
-                <button
-                  onClick={forceUpdate}
-                  className="h-[80px] w-[80px] shrink-0 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl flex flex-col items-center justify-center hover:bg-white/10 hover:text-red-400 transition-all text-[10px] uppercase font-bold text-white/50"
-                  title="Forçar Reinstalação"
-                >
-                  <RefreshCw size={20} className="mb-1" />
-                  REPARAR
-                </button>
-              )}
-              
+            {/* Módulo ModPack */}
+            <div className={`w-full bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-lg flex flex-col gap-3 transition-opacity duration-300 ${status === "bepinex_missing" || status === "bepinex_downloading" ? "opacity-30 pointer-events-none" : ""}`}>
+               <div className="flex justify-between items-center">
+                   <span className="font-bold text-sm text-white/90 uppercase tracking-wider flex items-center gap-2"><Package size={16} className="text-red-500" /> 2. ModPack do Servidor</span>
+                   {(status === "modpack_missing" || status === "idle" as any) ? <span className="text-[10px] text-red-400 font-bold uppercase tracking-widest bg-red-950/50 px-2 py-1 rounded">Atualização Pendente</span> : status === "modpack_downloading" ? <span className="text-[10px] text-yellow-400 font-bold uppercase tracking-widest bg-yellow-950/50 px-2 py-1 rounded">Baixando...</span> : <span className="text-[10px] text-green-400 font-bold uppercase tracking-widest bg-green-950/50 px-2 py-1 rounded">Atualizado</span>}
+               </div>
+               
+               {(status === "modpack_missing" || status === "idle" as any || status === "ready") && (
+                   <div className="flex gap-2 items-center">
+                       <button 
+                           onClick={handleUpdateModPack}
+                           className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold py-2 rounded transition-all border border-white/10 uppercase tracking-widest"
+                       >
+                           {status === "ready" ? "FORÇAR REPARO" : "ATUALIZAR MODS"}
+                       </button>
+                   </div>
+               )}
+               {status === "modpack_downloading" && (
+                   <div className="w-full h-[32px] bg-black/50 rounded overflow-hidden relative border border-white/10">
+                       <div 
+                         className="h-full bg-gradient-to-r from-red-600 to-red-400 transition-all duration-300 ease-out"
+                         style={{ width: `${progress}%` }}
+                       />
+                       <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-md">{progress}%</span>
+                   </div>
+               )}
+            </div>
+
+            {/* JOGAR */}
+            <div className="flex w-full gap-2 relative mt-2">
               <button
                 onClick={() => setShowHelp(true)}
                 className="h-[80px] w-[80px] shrink-0 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl flex items-center justify-center hover:bg-white/10 hover:text-red-400 transition-all"
@@ -267,22 +339,23 @@ function App() {
               </button>
 
               <button
-                onClick={handlePlayClick}
-                disabled={status === "playing" || status === "downloading"}
+                onClick={handleLaunchGame}
+                disabled={status !== "ready" && status !== "playing"}
                 className={`
-                  flex-1 relative h-[80px] rounded-2xl overflow-hidden font-black text-3xl tracking-widest transition-all duration-300 shadow-[0_0_40px_rgba(220,38,38,0.3)]
-                  ${status === "playing" ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" : 
-                    status === "ready" ? "bg-red-600 hover:bg-red-500 text-white hover:scale-[1.02]" :
-                    "bg-gradient-to-b from-red-700 to-red-950 hover:from-red-600 hover:to-red-900 text-white hover:shadow-[0_0_60px_rgba(220,38,38,0.6)] hover:scale-[1.02] border border-red-500/50"}
+                  flex-1 relative h-[80px] rounded-2xl overflow-hidden font-black text-3xl tracking-widest transition-all duration-300
+                  ${status === "playing" ? "bg-zinc-800 text-zinc-500 cursor-not-allowed shadow-none" : 
+                    status === "ready" ? "bg-red-600 hover:bg-red-500 text-white hover:scale-[1.02] shadow-[0_0_40px_rgba(220,38,38,0.5)] border border-red-500/50" :
+                    "bg-zinc-900/80 text-white/20 cursor-not-allowed shadow-none border border-white/5"}
                 `}
               >
-                <div className="absolute inset-0 bg-white opacity-0 hover:opacity-10 transition-opacity" />
+                {status === "ready" && <div className="absolute inset-0 bg-white opacity-0 hover:opacity-10 transition-opacity" />}
                 
                 <span className="relative z-10 flex items-center justify-center gap-4 drop-shadow-md">
-                  {status === "idle" && <><Download className="animate-bounce" size={28} /> ATUALIZAR</>}
-                  {status === "downloading" && "ATUALIZANDO..."}
-                  {status === "ready" && <><Play size={28} className="fill-white" /> JOGAR</>}
-                  {status === "playing" && "JOGO EM EXECUÇÃO"}
+                  {status === "playing" ? "EM EXECUÇÃO" : (
+                      <>
+                        <Play size={28} className={status === "ready" ? "fill-white" : "fill-white/20"} /> JOGAR
+                      </>
+                  )}
                 </span>
               </button>
             </div>

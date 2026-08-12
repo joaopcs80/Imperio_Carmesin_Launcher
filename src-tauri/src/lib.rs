@@ -161,6 +161,123 @@ fn exit_app() {
     std::process::exit(0);
 }
 
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize)]
+struct BepInExVersion {
+    version: String,
+    url: String,
+}
+
+#[tauri::command]
+async fn fetch_bepinex_versions() -> Result<Vec<BepInExVersion>, String> {
+    let client = Client::builder().user_agent("VRising-Launcher").build().map_err(|e| e.to_string())?;
+    
+    // Baixa o index de pacotes (usando API v1)
+    let res = client.get("https://thunderstore.io/c/v-rising/api/v1/package/")
+        .send().await.map_err(|e| e.to_string())?;
+        
+    let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    
+    let mut versions = Vec::new();
+    
+    if let Some(arr) = json.as_array() {
+        for pkg in arr {
+            if pkg["name"] == "BepInExPack_V_Rising" {
+                if let Some(versions_arr) = pkg["versions"].as_array() {
+                    for ver in versions_arr {
+                        if let (Some(version_number), Some(download_url)) = (ver["version_number"].as_str(), ver["download_url"].as_str()) {
+                            versions.push(BepInExVersion {
+                                version: version_number.to_string(),
+                                url: download_url.to_string(),
+                            });
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+    
+    Ok(versions)
+}
+
+#[tauri::command]
+async fn download_bepinex(url: String) -> Result<String, String> {
+    let game_path = find_v_rising_path().ok_or("A pasta do V Rising não foi encontrada na sua Steam.")?;
+    
+    let client = Client::builder().user_agent("VRising-Launcher").build().map_err(|e| e.to_string())?;
+    let res = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    
+    let bytes = res.bytes().await.map_err(|e| e.to_string())?;
+    
+    let temp_dir = std::env::temp_dir();
+    let zip_path = temp_dir.join("bepinex_temp.zip");
+    std::fs::write(&zip_path, bytes).map_err(|e| e.to_string())?;
+    
+    let zip_file = std::fs::File::open(&zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(zip_file).map_err(|e| e.to_string())?;
+    
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        if let Some(mut outpath) = file.enclosed_name() {
+            // Thunderstore zip contains a folder BepInExPack_V_Rising/
+            let path_str = outpath.to_string_lossy().to_string();
+            if path_str.starts_with("BepInExPack_V_Rising") {
+                let stripped = outpath.strip_prefix("BepInExPack_V_Rising").map_err(|e| e.to_string())?;
+                if stripped.as_os_str().is_empty() { continue; }
+                let full_outpath = PathBuf::from(&game_path).join(stripped);
+                
+                if file.is_dir() {
+                    std::fs::create_dir_all(&full_outpath).map_err(|e| e.to_string())?;
+                } else {
+                    if let Some(p) = full_outpath.parent() {
+                        if !p.exists() {
+                            std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                        }
+                    }
+                    let mut outfile = std::fs::File::create(&full_outpath).map_err(|e| e.to_string())?;
+                    std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+    
+    let _ = std::fs::remove_file(zip_path);
+    
+    // Desativar a janela de console preta do BepInEx
+    let cfg_path = PathBuf::from(&game_path).join("BepInEx").join("config").join("BepInEx.cfg");
+    if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+        let mut new_content = String::new();
+        let mut in_console = false;
+        for line in content.lines() {
+            if line.starts_with("[Logging.Console]") {
+                in_console = true;
+            } else if line.starts_with('[') {
+                in_console = false;
+            }
+            if in_console && line.starts_with("Enabled = true") {
+                new_content.push_str("Enabled = false\n");
+            } else {
+                new_content.push_str(line);
+                new_content.push('\n');
+            }
+        }
+        let _ = std::fs::write(&cfg_path, new_content);
+    }
+
+    Ok("BepInEx Instalado com sucesso!".into())
+}
+
+#[tauri::command]
+fn check_bepinex_installed() -> bool {
+    if let Some(game_path) = find_v_rising_path() {
+        let winhttp = PathBuf::from(&game_path).join("winhttp.dll");
+        return winhttp.exists();
+    }
+    false
+}
+
 #[tauri::command]
 fn check_modpack_installed() -> bool {
     if let Some(game_path) = find_v_rising_path() {
@@ -187,6 +304,9 @@ pub fn run() {
             fetch_latest_news,
             exit_app,
             check_modpack_installed,
+            check_bepinex_installed,
+            fetch_bepinex_versions,
+            download_bepinex,
             drag_window
         ])
         .run(tauri::generate_context!())
