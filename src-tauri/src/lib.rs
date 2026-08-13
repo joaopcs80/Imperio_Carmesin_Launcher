@@ -157,6 +157,20 @@ async fn fetch_latest_news() -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn fetch_patchnotes() -> Result<String, String> {
+    let client = Client::builder()
+        .user_agent("VRising-Launcher")
+        .build()
+        .map_err(|e| e.to_string())?;
+        
+    let res = client.get("https://www.imperiocarmesim.online/patchnotes.json")
+        .send().await.map_err(|e| e.to_string())?;
+        
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+#[tauri::command]
 fn exit_app() {
     std::process::exit(0);
 }
@@ -307,7 +321,8 @@ pub fn run() {
             check_bepinex_installed,
             fetch_bepinex_versions,
             download_bepinex,
-            drag_window
+            drag_window,
+            fetch_patchnotes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

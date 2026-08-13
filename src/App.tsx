@@ -39,16 +39,31 @@ function App() {
       }
     }).catch(() => setServerOnline(false));
 
-    // Buscar notícias do GitHub e gerenciar versão
-    invoke<string>("fetch_latest_news").then((jsonString) => {
+    // Buscar notícias do site oficial
+    invoke<string>("fetch_patchnotes").then((jsonString) => {
       try {
         const data = JSON.parse(jsonString);
         if (Array.isArray(data) && data.length > 0) {
           const formattedNews = data.slice(0, 4).map((r: any) => ({
-            tag: r.tag_name,
-            body: r.name || "Pequenas correções e melhorias."
+            tag: r.version || r.tag_name,
+            body: r.title || "Pequenas correções e melhorias."
           }));
           setNews(formattedNews);
+        } else {
+          setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no site." }]);
+        }
+      } catch (e) {
+        setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no site." }]);
+      }
+    }).catch(() => {
+        setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no site." }]);
+    });
+
+    // Buscar versão mais recente do GitHub e gerenciar instalação
+    invoke<string>("fetch_latest_news").then((jsonString) => {
+      try {
+        const data = JSON.parse(jsonString);
+        if (Array.isArray(data) && data.length > 0) {
           
           const currentLatest = data[0].tag_name;
           setLatestVersion(currentLatest);
@@ -76,7 +91,6 @@ function App() {
           });
           
         } else {
-          setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no momento." }]);
           invoke<boolean>("check_bepinex_installed").then(hasBepinex => {
              if (!hasBepinex) {
                 setStatus((prev) => prev === "playing" ? "playing" : "bepinex_missing");
@@ -93,14 +107,12 @@ function App() {
           });
         }
       } catch (e) {
-        setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no momento." }]);
         invoke<boolean>("check_bepinex_installed").then(hasBepinex => {
            if (!hasBepinex) setStatus((prev) => prev === "playing" ? "playing" : "bepinex_missing");
            else setStatus((prev) => prev === "playing" ? "playing" : "ready");
         });
       }
     }).catch(() => {
-        setNews([{ tag: "V1.0", body: "Nenhuma atualização encontrada no momento." }]);
         invoke<boolean>("check_bepinex_installed").then(hasBepinex => {
            if (!hasBepinex) setStatus((prev) => prev === "playing" ? "playing" : "bepinex_missing");
            else setStatus((prev) => prev === "playing" ? "playing" : "ready");
