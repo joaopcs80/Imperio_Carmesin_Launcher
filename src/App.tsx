@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Download, Play, RefreshCw, X, Server, Users, Shield, CheckCircle2, HelpCircle, Settings, Package } from "lucide-react";
+import { Play, X, Server, Users, Shield, HelpCircle, Package } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import bgImage from "./assets/bg.png";
