@@ -58,7 +58,7 @@ fn check_game_running() -> bool {
 #[tauri::command]
 fn launch_game() -> Result<(), String> {
     std::process::Command::new("cmd")
-        .args(["/C", "start steam://rungameid/1604030"])
+        .args(["/C", "start steam://rungameid/1604030//+connect 198.22.204.17:43157"])
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
