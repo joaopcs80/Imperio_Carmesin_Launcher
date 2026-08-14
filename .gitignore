@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Updater keys & docs
+updater_keys*
+*.pub
+COMO_ATUALIZAR.md

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Play, X, Server, Users, Shield, HelpCircle, Package } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { check } from "@tauri-apps/plugin-updater";
 import bgImage from "./assets/bg.png";
 import "./App.css";
 
@@ -14,6 +15,14 @@ function App() {
   const [bepVersions, setBepVersions] = useState<{version: string, url: string}[]>([]);
   const [selectedBepUrl, setSelectedBepUrl] = useState("");
 
+  // Updater States
+  const [updateAvailable, setUpdateAvailable] = useState<any>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [autoUpdate, setAutoUpdate] = useState(() => {
+    return localStorage.getItem("auto_update") !== "false"; // Default is true
+  });
+
   // Dynamic Data States
   const [serverOnline, setServerOnline] = useState(false);
   const [playersOnline, setPlayersOnline] = useState(0);
@@ -22,6 +31,33 @@ function App() {
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
   useEffect(() => {
+    // Checar atualizações do Launcher
+    async function checkForLauncherUpdates() {
+      try {
+        const update = await check();
+        if (update) {
+          if (autoUpdate) {
+             setIsUpdating(true);
+             let downloaded = 0;
+             await update.downloadAndInstall((event: any) => {
+                if (event.event === "Progress") {
+                   downloaded += event.data.chunkLength;
+                   if (event.data.contentLength) {
+                     setUpdateProgress(Math.round((downloaded / event.data.contentLength) * 100));
+                   }
+                }
+             });
+             invoke("exit_app"); // Fecha para o usuário abrir de novo (ou poderíamos usar plugin-process para relaunch)
+          } else {
+             setUpdateAvailable(update);
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao checar atualizações:", e);
+      }
+    }
+    checkForLauncherUpdates();
+
     // Escutar progresso de download
     const unlisten = listen<number>("download_progress", (event) => {
       setProgress(Math.round(event.payload));
@@ -198,6 +234,33 @@ function App() {
     invoke("exit_app");
   };
 
+  const toggleAutoUpdate = () => {
+    const newVal = !autoUpdate;
+    setAutoUpdate(newVal);
+    localStorage.setItem("auto_update", newVal ? "true" : "false");
+  };
+
+  const startManualUpdate = async () => {
+    if (!updateAvailable) return;
+    setIsUpdating(true);
+    let downloaded = 0;
+    try {
+      await updateAvailable.downloadAndInstall((event: any) => {
+          if (event.event === "Progress") {
+              downloaded += event.data.chunkLength;
+              if (event.data.contentLength) {
+                setUpdateProgress(Math.round((downloaded / event.data.contentLength) * 100));
+              }
+          }
+      });
+      invoke("exit_app");
+    } catch (e) {
+      setErrorMsg("Erro ao atualizar o launcher: " + e);
+      setIsUpdating(false);
+      setUpdateAvailable(null);
+    }
+  };
+
   return (
     <div
       className="h-screen w-screen overflow-hidden text-white flex flex-col relative select-none font-sans"
@@ -219,6 +282,15 @@ function App() {
           V Rising Server Launcher
         </div>
         <div className="flex gap-4 items-center">
+          <label className="flex items-center gap-2 text-xs text-white/50 hover:text-white cursor-pointer" onMouseDown={(e) => e.stopPropagation()}>
+            <input 
+              type="checkbox" 
+              checked={autoUpdate}
+              onChange={toggleAutoUpdate}
+              className="accent-red-500 w-3 h-3"
+            />
+            Atualizar Launcher Automaticamente
+          </label>
           <button onClick={closeApp} className="text-white/50 hover:text-red-500 hover:bg-red-500/10 p-1 rounded transition-colors cursor-pointer" onMouseDown={(e) => e.stopPropagation()}>
             <X size={16} />
           </button>
@@ -429,6 +501,52 @@ function App() {
               ENTENDIDO
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Updater Modal (Manual) */}
+      {updateAvailable && !isUpdating && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-zinc-950 border border-red-600/50 rounded-2xl p-6 max-w-md shadow-2xl relative flex flex-col items-center text-center">
+            <div className="w-16 h-16 bg-red-950 rounded-full flex items-center justify-center mb-4 border border-red-500/30">
+              <Package size={32} className="text-red-500" />
+            </div>
+            <h2 className="text-xl font-black text-white mb-2 uppercase tracking-wide">
+              Nova Versão Disponível
+            </h2>
+            <p className="text-white/80 leading-relaxed text-sm mb-6">
+              O Launcher possui uma atualização ({updateAvailable.version}). Deseja instalar agora?
+            </p>
+            <div className="flex gap-3 w-full">
+              <button 
+                onClick={() => setUpdateAvailable(null)}
+                className="bg-zinc-800 hover:bg-zinc-700 text-white font-bold py-2 px-4 rounded-lg transition-colors flex-1"
+              >
+                DEPOIS
+              </button>
+              <button 
+                onClick={startManualUpdate}
+                className="bg-red-600 hover:bg-red-500 text-white font-bold py-2 px-4 rounded-lg transition-colors flex-1"
+              >
+                ATUALIZAR
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Updating Overlay */}
+      {isUpdating && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 flex-col gap-4">
+            <h2 className="text-2xl font-black text-red-500 animate-pulse">Atualizando Launcher...</h2>
+            <div className="w-64 h-[20px] bg-black/50 rounded overflow-hidden relative border border-white/10">
+                <div 
+                  className="h-full bg-gradient-to-r from-red-600 to-red-400 transition-all duration-300 ease-out"
+                  style={{ width: `${updateProgress}%` }}
+                />
+                <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-md">{updateProgress}%</span>
+            </div>
+            <p className="text-white/50 text-xs">O launcher fechará automaticamente ao concluir.</p>
         </div>
       )}
     </div>
